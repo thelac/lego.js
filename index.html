@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Daniel Suo | Legos! In WebGL!</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				font-family: Courier;
+				background-color: #f0f0f0;
+				margin: 0px;
+				overflow: hidden;
+			}
+
+			#oldie { background-color: #ddd !important }
+		</style>
+	</head>
+	<body>
+
+		<script src="three.min.js"></script>
+		<script src="lego.js"></script>
+		<script src="OrbitControls.js"></script>
+
+		<script>
+
+			var container, stats;
+			var camera, scene, renderer;
+			var projector, plane;
+			var mouse2D, mouse3D, raycaster,
+			rollOveredFace, isShiftDown = false,
+			theta = 45 * 0.5, isCtrlDown = false;
+
+			var rotated = false;
+
+			var controls;
+
+			var addBrick = false;
+
+			var rollOverMesh, rollOverMaterial;
+			var voxelPosition = new THREE.Vector3(), tmpVec = new THREE.Vector3(), normalMatrix = new THREE.Matrix3();
+			var cubeGeo, cubeMaterial;
+			var i, intersector;
+
+			var colors;
+			var currColor = -1;
+
+			var width, height, depth, color;
+
+			var wOffset, dOffset;
+
+			init();
+			animate();
+
+
+			function init() {
+
+				colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff];
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				var info = document.createElement( 'div' );
+				info.style.position = 'absolute';
+				info.style.top = '10px';
+				info.style.left = '10px';
+				info.style.width = '100%';
+				info.style.textAlign = 'left';
+				info.innerHTML = 'LEGO.js<br><strong>z</strong>: drop brick<br><strong>x</strong>: rotate brick<br><strong>w and d</strong>: increase brick width / depth<br><strong>a and s</strong>: decrease brick width / depth<br><strong>r</strong>: increase brick height<br><strong>f</strong>: decrease brick height<br><strong>c</strong>: change color<br><strong>control + click</strong>: delete brick<br><strong>click + drag</strong>: rotate<br><strong>wheel mouse</strong>: zoom';
+				container.appendChild( info );
+
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 10000 );
+				camera.position.y = 200;
+				camera.position.x = 200;
+				camera.position.z = 200;
+
+				scene = new THREE.Scene();
+				scene.add( new THREE.AxisHelper(1000) );
+
+				controls = new THREE.OrbitControls( camera );
+		        controls.addEventListener( 'change', render );
+		        controls.movementSpeed = 70;
+		        controls.lookSpeed = 0.05;
+		        controls.noFly = true;
+		        controls.lookVertical = false;
+
+				// roll-over helpers
+
+				width = 2;
+				height = 1;
+				depth = 3;
+				color = getColor();
+				updateOffsets();
+
+				rollOverGeo = new THREE.CubeGeometry( 8, 8, 8 );
+				rollOverMaterial = new THREE.MeshBasicMaterial( { color: color, opacity: 0.5, transparent: true } );
+				var brick = new Brick(width, height, depth, color);
+				rollOverMesh = new THREE.Mesh( brick.geometry, rollOverMaterial );
+				scene.add( rollOverMesh );
+
+				
+				// cubes
+
+				// cubeGeo = new THREE.Geometry();
+				// THREE.GeometryUtils.merge(cubeGeo, rollOverBrick.geometry);
+				// cubeMaterial = rollOverBrick.mesh.material;
+				cube = new Brick(width, height, depth, color);
+
+				// picking
+
+				projector = new THREE.Projector();
+
+				// grid
+
+				plane = new THREE.Mesh( new THREE.PlaneGeometry( 240, 240, 30, 30 ), new THREE.MeshBasicMaterial( { color: 0x555555, wireframe: true } ) );
+
+				var grid = new Brick(30, 1, 30, 0xaaaaaa, 1, 1);
+				plane = grid.mesh;
+				// plane.rotation.x = - Math.PI / 2;
+				scene.add( plane );
+
+				mouse2D = new THREE.Vector3( 0, 10000, 0.5 );
+
+				// Lights
+
+				var ambientLight = new THREE.AmbientLight( 0x606060 );
+				scene.add( ambientLight );
+
+				var directionalLight = new THREE.DirectionalLight( 0xffffff );
+				directionalLight.position.set( 1, 0.75, 0.5 ).normalize();
+				scene.add( directionalLight );
+
+				renderer = new THREE.WebGLRenderer( { antialias: true, preserveDrawingBuffer: true } );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+				container.appendChild( renderer.domElement );
+
+				document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+				document.addEventListener( 'mousedown', onDocumentMouseDown, false );
+				document.addEventListener( 'keydown', onDocumentKeyDown, false );
+				document.addEventListener( 'keyup', onDocumentKeyUp, false );
+				// document.addEventListener( 'keypress',aaa onDocumentKeyPress, false);
+
+				//
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function getRealIntersector( intersects ) {
+
+				for( i = 0; i < intersects.length; i++ ) {
+
+					intersector = intersects[ i ];
+
+					if ( intersector.object != rollOverMesh ) {
+
+						return intersector;
+
+					}
+
+				}
+
+				return null;
+
+			}
+
+			function setVoxelPosition( intersector ) {
+
+				normalMatrix.getNormalMatrix( intersector.object.matrixWorld );
+
+				tmpVec.copy( intersector.face.normal );
+				tmpVec.applyMatrix3( normalMatrix ).normalize();
+
+				voxelPosition.addVectors( intersector.point, tmpVec );
+
+				voxelPosition.x = Math.floor( voxelPosition.x / LEGO.dim.pitch) * LEGO.dim.pitch + LEGO.dim.pitch / (!rotated ? wOffset : dOffset);// + 25;
+				voxelPosition.y = Math.floor( voxelPosition.y / LEGO.dim.brickHeight) * LEGO.dim.brickHeight + height * LEGO.dim.brickHeight / 2;// + 25;
+				voxelPosition.z = Math.floor( voxelPosition.z / LEGO.dim.pitch ) * LEGO.dim.pitch + LEGO.dim.pitch / (!rotated ? dOffset : wOffset);// + 25;
+
+			}
+
+			function onDocumentMouseMove( event ) {
+
+				event.preventDefault();
+
+				mouse2D.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+				mouse2D.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+
+			}
+
+			function onDocumentMouseDown( event ) {
+
+				event.preventDefault();
+
+				var intersects = getIntersects();
+
+				// if ( intersects.length > 0 ) {
+
+					if ( isCtrlDown ) {
+
+						if ( intersector.object != plane ) {
+
+							scene.remove( intersector.object );
+
+						}
+
+					// create cube
+
+					} else {
+
+						if (addBrick) {
+							dropBrick(intersects);
+						}
+					}
+
+				// }
+			}
+
+			function rotateY(angle) {
+				var axis = new THREE.Vector3(0, 1, 0);
+				return(new THREE.Matrix4().makeRotationAxis(axis, angle));
+			}
+
+			function getIntersects() {
+				var intersects = raycaster.intersectObjects( scene.children );
+				return intersects;
+			}
+
+			function dropBrick(intersects) {
+				intersector = getRealIntersector( intersects );
+				setVoxelPosition( intersector );
+
+				var voxelCube = new Brick(width, height, depth, color);
+				var voxel = new THREE.Mesh(voxelCube.mesh.geometry, voxelCube.mesh.material);
+				console.log(voxel);
+				voxel.rotation.y = rollOverMesh.rotation.y;
+				voxel.position.copy( voxelPosition );
+				// voxel.matrixAutoUpdate = false;
+				// voxel.updateMatrix();
+				scene.add( voxel );
+			}
+
+			function onDocumentKeyDown( event ) {
+
+				switch( event.keyCode ) {
+
+					case 16: isShiftDown = true; break;
+					case 17: isCtrlDown = true; break;
+					case 18: addBrick = true; break; 
+					case 88: // x
+						rotateMesh();
+						rotated = !rotated;
+						break;
+					case 87: // w
+						width = width + 1;
+						//rollOverMesh = new THREE.Mesh( cube.geometry, rollOverMaterial );
+						refreshRollOverMesh();
+						break;
+					case 83: // s
+						width = Math.max(1, width - 1);
+						refreshRollOverMesh();
+						break;
+					case 68: // d
+						depth = depth + 1;
+						refreshRollOverMesh();
+						break;
+					case 65: // a
+						depth = Math.max(1, depth - 1);
+						refreshRollOverMesh();
+						break;
+					case 82: // r
+						height = height + 1;
+						refreshRollOverMesh();
+						break;
+					case 70: // f
+						height = Math.max(1, height - 1);
+						refreshRollOverMesh();
+						break;
+					case 90: // z
+						var intersects = getIntersects();
+						if (intersects.length > 0) {
+							dropBrick(intersects);
+						}
+						break;
+					case 67: // c
+						color = getColor();
+						refreshRollOverMesh();
+						break;
+				}
+
+			}
+
+			function refreshRollOverMesh() {
+				scene.remove( rollOverMesh );
+				var cube = new Brick(width, height, depth, color);
+				var material = new THREE.MeshBasicMaterial( { color: color, opacity: 0.5, transparent: true } );
+				rollOverMesh = new THREE.Mesh( cube.geometry, material );
+				if (rotated) rotateMesh();
+				scene.add( rollOverMesh );
+				updateOffsets();
+			}
+
+			function onDocumentKeyUp( event ) {
+
+				switch ( event.keyCode ) {
+
+					case 16: isShiftDown = false; break;
+					case 17: isCtrlDown = false; break;
+					case 18: addBrick = false; break;
+				}
+
+			}
+
+			function rotateMesh() {
+				rollOverMesh.applyMatrix(rotateY(-Math.PI / 2));
+			}
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				render();
+				controls.update();
+
+			}
+
+			function getColor() {
+				currColor = (currColor + 1) % colors.length;
+				return colors[currColor];
+			}
+
+			function render() {
+
+				// if ( isShiftDown ) {
+
+				// 	theta += mouse2D.x * 1.5;
+
+				// }
+
+				raycaster = projector.pickingRay( mouse2D.clone(), camera );
+
+				var intersects = raycaster.intersectObjects( scene.children );
+
+				if ( intersects.length > 0 ) {
+
+					intersector = getRealIntersector( intersects );
+					if ( intersector ) {
+
+						setVoxelPosition( intersector );
+						rollOverMesh.position = voxelPosition;
+
+					}
+
+				}
+
+				// camera.position.x = 1400 * Math.sin( THREE.Math.degToRad( theta ) );
+				// camera.position.z = 1400 * Math.cos( THREE.Math.degToRad( theta ) );
+
+				// camera.lookAt( scene.position );
+
+				renderer.render( scene, camera );
+
+			}
+
+			function updateOffsets() {
+				wOffset = width % 2 == 0 ? 1 : 2;
+				dOffset = depth % 2 == 0 ? 1 : 2;
+			}
+
+		</script>
+
+	</body>
+</html>
